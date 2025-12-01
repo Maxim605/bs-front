@@ -116,6 +116,77 @@
             padding: 20px;
             color: #666;
         }
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 13px;
+            pointer-events: auto;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 1000;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            max-width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            line-height: 1.5;
+        }
+        .tooltip::-webkit-scrollbar {
+            width: 8px;
+        }
+        .tooltip::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        .tooltip::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+        }
+        .tooltip::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+        .tooltip.visible {
+            opacity: 1;
+        }
+        .tooltip-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding-bottom: 5px;
+        }
+        .tooltip-item {
+            margin: 3px 0;
+        }
+        .tooltip-item-with-button {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 3px 0;
+        }
+        .copy-button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            cursor: pointer;
+            padding: 4px 8px;
+            display: inline-flex;
+            align-items: center;
+            transition: background 0.2s;
+        }
+        .copy-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        .copy-button:active {
+            background: rgba(255, 255, 255, 0.4);
+        }
+        .copy-icon {
+            width: 14px;
+            height: 14px;
+            fill: white;
+        }
     </style>
 </head>
 <body>
@@ -147,6 +218,7 @@
             </div>
         </div>
         <div id="graph"></div>
+        <div id="tooltip" class="tooltip"></div>
         <div class="settings-panel">
             <h3>Настройки графа</h3>
             <div class="settings-row">
@@ -180,6 +252,44 @@
                 <button onclick="updateNodeSize()">Применить</button>
             </div>
         </div>
+        <div class="settings-panel">
+            <h3>Настройки всплывающей подсказки</h3>
+            <div class="settings-row">
+                <label>Размер шрифта:</label>
+                <input type="range" id="tooltipFontSize" min="10" max="18" value="13" step="1">
+                <input type="number" id="tooltipFontSizeValue" value="13" min="10" max="18" step="1">
+                <button onclick="updateTooltipFontSize()">Применить</button>
+            </div>
+            <div class="settings-row">
+                <label>Цвет текста:</label>
+                <input type="color" id="tooltipTextColor" value="#ffffff">
+                <button onclick="updateTooltipTextColor()">Применить</button>
+            </div>
+            <div class="settings-row">
+                <label>Время запроса данных о пользователе (сек):</label>
+                <input type="number" id="tooltipRequestDelay" value="2" min="0.5" max="10" step="0.5">
+                <span style="margin-left: 10px; color: #666; font-size: 12px;">Запрос выполнится после указанного времени наведения</span>
+            </div>
+            <div class="settings-row">
+                <label>Цвет фона:</label>
+                <input type="color" id="tooltipBackgroundColor" value="#000000">
+                <button onclick="updateTooltipBackgroundColor()">Применить</button>
+            </div>
+        </div>
+        <div class="settings-panel">
+            <h3>Настройки выбранной вершины</h3>
+            <div class="settings-row">
+                <label>Цвет обводки:</label>
+                <input type="color" id="selectedNodeStrokeColor" value="#ff0000">
+                <button onclick="updateSelectedNodeStroke()">Применить</button>
+            </div>
+            <div class="settings-row">
+                <label>Ширина обводки:</label>
+                <input type="range" id="selectedNodeStrokeWidth" min="1" max="10" value="3" step="1">
+                <input type="number" id="selectedNodeStrokeWidthValue" value="3" min="1" max="10" step="1">
+                <button onclick="updateSelectedNodeStroke()">Применить</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -189,8 +299,19 @@
             linkDistance: 50,
             collisionRadius: 20,
             alphaDecay: 0.0228,
-            nodeSize: 8
+            nodeSize: 8,
+            tooltipFontSize: 13,
+            tooltipTextColor: '#ffffff',
+            tooltipBackgroundColor: '#000000',
+            tooltipRequestDelay: 2,
+            selectedNodeStrokeColor: '#ff0000',
+            selectedNodeStrokeWidth: 3
         };
+        let tooltipTimer = null;
+        let currentTooltipNodeId = null;
+        let selectedNodeId = null;
+        let selectedNodeData = null;
+        let userDataCache = new Map();
 
         // Синхронизация range и number inputs
         document.addEventListener('DOMContentLoaded', () => {
@@ -209,6 +330,8 @@
             syncInputs('collisionRadius', 'collisionRadiusValue');
             syncInputs('alphaDecay', 'alphaDecayValue');
             syncInputs('nodeSize', 'nodeSizeValue');
+            syncInputs('tooltipFontSize', 'tooltipFontSizeValue');
+            syncInputs('selectedNodeStrokeWidth', 'selectedNodeStrokeWidthValue');
         });
 
         function loadGraph() {
@@ -245,6 +368,15 @@
             const graphEl = document.getElementById('graph');
             graphEl.innerHTML = '';
             
+            // Сбрасываем выбранную вершину при перерисовке
+            selectedNodeId = null;
+            selectedNodeData = null;
+            currentTooltipNodeId = null;
+            if (tooltipTimer) {
+                clearTimeout(tooltipTimer);
+                tooltipTimer = null;
+            }
+            
             const width = graphEl.clientWidth;
             const height = 800;
 
@@ -265,6 +397,10 @@
                 .scaleExtent([0.1, 4])
                 .on('zoom', (event) => {
                     g.attr('transform', event.transform);
+                    // Обновляем позицию tooltip при зуме
+                    if (selectedNodeId && selectedNodeData) {
+                        updateSelectedNodeTooltip();
+                    }
                 });
 
             svg.call(zoom);
@@ -294,6 +430,27 @@
                 .attr('class', 'node')
                 .attr('r', currentParams.nodeSize)
                 .attr('fill', d => d3.schemeCategory10[d.id % 10])
+                .style('cursor', 'pointer')
+                .style('stroke', d => d.id === selectedNodeId ? currentParams.selectedNodeStrokeColor : 'none')
+                .style('stroke-width', d => d.id === selectedNodeId ? currentParams.selectedNodeStrokeWidth : 0)
+                .on('mouseover', function(event, d) {
+                    if (!selectedNodeId) {
+                        showTooltip(event, d);
+                    }
+                })
+                .on('mousemove', function(event) {
+                    if (!selectedNodeId) {
+                        moveTooltip(event);
+                    }
+                })
+                .on('mouseout', function() {
+                    if (!selectedNodeId) {
+                        hideTooltip();
+                    }
+                })
+                .on('click', function(event, d) {
+                    toggleNodeSelection(d);
+                })
                 .call(drag(simulation));
 
             // Добавляем подписи
@@ -321,6 +478,11 @@
                 label
                     .attr('x', d => d.x)
                     .attr('y', d => d.y);
+                
+                // Обновляем позицию tooltip для выбранной вершины
+                if (selectedNodeId && selectedNodeData) {
+                    updateSelectedNodeTooltip();
+                }
             });
 
             // Функция для перетаскивания узлов
@@ -415,11 +577,392 @@
             }
         }
 
+        // Функции для работы с tooltip
+        function showTooltip(event, nodeData) {
+            const tooltip = document.getElementById('tooltip');
+            if (!tooltip) return;
+            
+            const nodeId = nodeData.id || nodeData._key || 'N/A';
+            currentTooltipNodeId = nodeId;
+            
+            // Очищаем предыдущий таймер
+            if (tooltipTimer) {
+                clearTimeout(tooltipTimer);
+                tooltipTimer = null;
+            }
+            
+            const escapedNodeId = String(nodeId).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            
+            // Показываем базовую информацию сразу
+            showBasicTooltip(nodeId, escapedNodeId, nodeData);
+            moveTooltip(event);
+            
+            // Устанавливаем таймер для запроса данных из БД
+            const delay = parseFloat(document.getElementById('tooltipRequestDelay').value) * 1000 || 2000;
+            tooltipTimer = setTimeout(() => {
+                if (currentTooltipNodeId === nodeId) {
+                    fetchUserData(nodeId, escapedNodeId, nodeData);
+                }
+            }, delay);
+        }
+        
+        function showBasicTooltip(nodeId, escapedNodeId, nodeData) {
+            const tooltip = document.getElementById('tooltip');
+            if (!tooltip) return;
+            
+            // Формируем базовое содержимое tooltip
+            let content = '<div class="tooltip-title">Информация о пользователе</div>';
+            content += `<div class="tooltip-item-with-button">
+                <span><strong>ID:</strong> ${nodeId}</span>
+                <button class="copy-button" onclick="copyToClipboard('${escapedNodeId}', this)" title="Копировать ID">
+                    <svg class="copy-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                    </svg>
+                </button>
+            </div>`;
+            content += `<div class="tooltip-item"><strong>Имя:</strong> ${nodeData.name || 'Не указано'}</div>`;
+            
+            // Подсчитываем количество связей для этого узла
+            if (links) {
+                const connections = links.filter(link => {
+                    const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                    const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                    return sourceId === nodeData.id || targetId === nodeData.id;
+                }).length;
+                content += `<div class="tooltip-item"><strong>Связей:</strong> ${connections}</div>`;
+            }
+            
+            content += '<div class="tooltip-item" style="color: #aaa; font-size: 0.9em; margin-top: 5px;">Загрузка данных...</div>';
+            
+            tooltip.innerHTML = content;
+            tooltip.style.fontSize = currentParams.tooltipFontSize + 'px';
+            tooltip.style.color = currentParams.tooltipTextColor;
+            // Применяем цвет фона
+            const bgColor = currentParams.tooltipBackgroundColor;
+            const r = parseInt(bgColor.slice(1, 3), 16);
+            const g = parseInt(bgColor.slice(3, 5), 16);
+            const b = parseInt(bgColor.slice(5, 7), 16);
+            tooltip.style.background = `rgba(${r}, ${g}, ${b}, 0.9)`;
+            tooltip.classList.add('visible');
+        }
+        
+        function fetchUserData(nodeId, escapedNodeId, nodeData) {
+            // Проверяем кэш
+            if (userDataCache.has(nodeId)) {
+                updateTooltipWithUserData(nodeId, escapedNodeId, nodeData, userDataCache.get(nodeId));
+                return;
+            }
+            
+            // Запрос данных из БД
+            fetch(`/api/user/${encodeURIComponent(nodeId)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Пользователь не найден');
+                    }
+                    return response.json();
+                })
+                .then(userData => {
+                    // Сохраняем в кэш
+                    userDataCache.set(nodeId, userData);
+                    // Обновляем tooltip только если курсор все еще на этой вершине
+                    if (currentTooltipNodeId === nodeId) {
+                        updateTooltipWithUserData(nodeId, escapedNodeId, nodeData, userData);
+                    }
+                })
+                .catch(error => {
+                    console.error('Ошибка загрузки данных пользователя:', error);
+                    if (currentTooltipNodeId === nodeId) {
+                        const tooltip = document.getElementById('tooltip');
+                        if (tooltip) {
+                            const errorMsg = tooltip.querySelector('.tooltip-item:last-child');
+                            if (errorMsg) {
+                                errorMsg.textContent = 'Данные не найдены';
+                                errorMsg.style.color = '#ff6b6b';
+                            }
+                        }
+                    }
+                });
+        }
+        
+        function updateTooltipWithUserData(nodeId, escapedNodeId, nodeData, userData) {
+            const tooltip = document.getElementById('tooltip');
+            if (!tooltip || currentTooltipNodeId !== nodeId) return;
+            
+            // Функция для форматирования значения
+            function formatValue(value) {
+                if (value === null || value === undefined) {
+                    return 'null';
+                }
+                if (typeof value === 'object') {
+                    if (Array.isArray(value)) {
+                        return JSON.stringify(value);
+                    }
+                    // Если объект имеет свойство title, используем его
+                    if (value.title !== undefined) {
+                        return value.title;
+                    }
+                    return JSON.stringify(value);
+                }
+                return String(value);
+            }
+            
+            // Функция для экранирования HTML
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+            
+            // Формируем полное содержимое tooltip с данными из БД
+            let content = '<div class="tooltip-title">Информация о пользователе</div>';
+            content += `<div class="tooltip-item-with-button">
+                <span><strong>ID:</strong> ${nodeId}</span>
+                <button class="copy-button" onclick="copyToClipboard('${escapedNodeId}', this)" title="Копировать ID">
+                    <svg class="copy-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                    </svg>
+                </button>
+            </div>`;
+            
+            // Добавляем все поля из userData
+            const excludedKeys = ['_id', '_key', '_rev']; // Системные поля ArangoDB можно исключить или оставить
+            const sortedKeys = Object.keys(userData).sort();
+            
+            for (const key of sortedKeys) {
+                // Пропускаем системные поля, если хотим (можно раскомментировать)
+                // if (excludedKeys.includes(key)) continue;
+                
+                const value = userData[key];
+                const formattedValue = formatValue(value);
+                const escapedValue = escapeHtml(formattedValue);
+                
+                // Специальная обработка для некоторых полей
+                if (key === 'sex') {
+                    const sexText = value === 1 ? 'Женский' : value === 2 ? 'Мужской' : (value ? String(value) : 'Не указан');
+                    content += `<div class="tooltip-item"><strong>${escapeHtml(key)}:</strong> ${escapeHtml(sexText)}</div>`;
+                } else if (key === 'city' || key === 'country') {
+                    // Уже обработано в formatValue
+                    content += `<div class="tooltip-item"><strong>${escapeHtml(key)}:</strong> ${escapedValue}</div>`;
+                } else {
+                    content += `<div class="tooltip-item"><strong>${escapeHtml(key)}:</strong> ${escapedValue}</div>`;
+                }
+            }
+            
+            // Подсчитываем количество связей
+            if (links) {
+                const connections = links.filter(link => {
+                    const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                    const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                    return sourceId === nodeData.id || targetId === nodeData.id;
+                }).length;
+                content += `<div class="tooltip-item"><strong>Связей:</strong> ${connections}</div>`;
+            }
+            
+            tooltip.innerHTML = content;
+            tooltip.style.fontSize = currentParams.tooltipFontSize + 'px';
+            tooltip.style.color = currentParams.tooltipTextColor;
+            // Применяем цвет фона
+            const bgColor = currentParams.tooltipBackgroundColor;
+            const r = parseInt(bgColor.slice(1, 3), 16);
+            const g = parseInt(bgColor.slice(3, 5), 16);
+            const b = parseInt(bgColor.slice(5, 7), 16);
+            tooltip.style.background = `rgba(${r}, ${g}, ${b}, 0.9)`;
+        }
+        
+        // Функция для копирования в буфер обмена
+        function copyToClipboard(text, button) {
+            if (event) {
+                event.stopPropagation();
+                event.preventDefault();
+            }
+            navigator.clipboard.writeText(text).then(() => {
+                // Визуальная обратная связь
+                const originalHTML = button.innerHTML;
+                button.innerHTML = '<svg class="copy-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+                button.style.background = 'rgba(76, 175, 80, 0.5)';
+                setTimeout(() => {
+                    button.innerHTML = originalHTML;
+                    button.style.background = '';
+                }, 1000);
+            }).catch(err => {
+                console.error('Ошибка копирования:', err);
+                // Fallback для старых браузеров
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                textArea.style.position = 'fixed';
+                textArea.style.opacity = '0';
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    const originalHTML = button.innerHTML;
+                    button.innerHTML = '<svg class="copy-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+                    button.style.background = 'rgba(76, 175, 80, 0.5)';
+                    setTimeout(() => {
+                        button.innerHTML = originalHTML;
+                        button.style.background = '';
+                    }, 1000);
+                } catch (err) {
+                    console.error('Ошибка копирования (fallback):', err);
+                }
+                document.body.removeChild(textArea);
+            });
+        }
+
+        function moveTooltip(event) {
+            const tooltip = document.getElementById('tooltip');
+            if (!tooltip) return;
+            
+            // Позиционируем tooltip рядом с курсором
+            const offset = 15;
+            tooltip.style.left = (event.pageX + offset) + 'px';
+            tooltip.style.top = (event.pageY + offset) + 'px';
+        }
+
+        function hideTooltip() {
+            // Не скрываем tooltip, если вершина выбрана
+            if (selectedNodeId) return;
+            
+            // Очищаем таймер
+            if (tooltipTimer) {
+                clearTimeout(tooltipTimer);
+                tooltipTimer = null;
+            }
+            currentTooltipNodeId = null;
+            
+            const tooltip = document.getElementById('tooltip');
+            if (tooltip) {
+                tooltip.classList.remove('visible');
+            }
+        }
+        
+        function toggleNodeSelection(nodeData) {
+            const nodeId = nodeData.id || nodeData._key || 'N/A';
+            
+            if (selectedNodeId === nodeId) {
+                // Снимаем выделение
+                selectedNodeId = null;
+                selectedNodeData = null;
+                hideTooltip();
+                
+                // Убираем обводку
+                if (g) {
+                    g.selectAll('.node')
+                        .style('stroke', 'none')
+                        .style('stroke-width', 0);
+                }
+            } else {
+                // Выбираем новую вершину
+                selectedNodeId = nodeId;
+                selectedNodeData = nodeData;
+                
+                // Показываем tooltip
+                const escapedNodeId = String(nodeId).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                showBasicTooltip(nodeId, escapedNodeId, nodeData);
+                
+                // Запрашиваем данные из БД
+                const delay = parseFloat(document.getElementById('tooltipRequestDelay').value) * 1000 || 2000;
+                if (tooltipTimer) {
+                    clearTimeout(tooltipTimer);
+                }
+                tooltipTimer = setTimeout(() => {
+                    if (selectedNodeId === nodeId) {
+                        fetchUserData(nodeId, escapedNodeId, nodeData);
+                    }
+                }, delay);
+                
+                // Обновляем обводку
+                if (g) {
+                    g.selectAll('.node')
+                        .style('stroke', d => d.id === selectedNodeId ? currentParams.selectedNodeStrokeColor : 'none')
+                        .style('stroke-width', d => d.id === selectedNodeId ? currentParams.selectedNodeStrokeWidth : 0);
+                }
+                
+                // Обновляем позицию tooltip
+                updateSelectedNodeTooltip();
+            }
+        }
+        
+        function updateSelectedNodeTooltip() {
+            if (!selectedNodeId || !selectedNodeData || !g || !svg) return;
+            
+            // Находим выбранный узел
+            const selectedNode = nodes.find(n => n.id === selectedNodeId);
+            if (!selectedNode || selectedNode.x === undefined || selectedNode.y === undefined) return;
+            
+            // Получаем трансформацию SVG
+            const transform = d3.zoomTransform(svg.node());
+            const nodeX = selectedNode.x * transform.k + transform.x;
+            const nodeY = selectedNode.y * transform.k + transform.y;
+            
+            // Получаем позицию tooltip
+            const tooltip = document.getElementById('tooltip');
+            if (!tooltip) return;
+            
+            const graphRect = document.getElementById('graph').getBoundingClientRect();
+            
+            // Позиционируем tooltip справа от вершины
+            const offset = 20;
+            const tooltipX = graphRect.left + nodeX + currentParams.nodeSize + offset;
+            const tooltipY = graphRect.top + nodeY;
+            
+            tooltip.style.left = tooltipX + 'px';
+            tooltip.style.top = tooltipY + 'px';
+            tooltip.classList.add('visible');
+        }
+
+        function updateTooltipFontSize() {
+            const value = parseFloat(document.getElementById('tooltipFontSize').value);
+            currentParams.tooltipFontSize = value;
+            const tooltip = document.getElementById('tooltip');
+            if (tooltip) {
+                tooltip.style.fontSize = value + 'px';
+            }
+        }
+
+        function updateTooltipTextColor() {
+            const value = document.getElementById('tooltipTextColor').value;
+            currentParams.tooltipTextColor = value;
+            const tooltip = document.getElementById('tooltip');
+            if (tooltip) {
+                tooltip.style.color = value;
+            }
+        }
+        
+        function updateTooltipBackgroundColor() {
+            const value = document.getElementById('tooltipBackgroundColor').value;
+            currentParams.tooltipBackgroundColor = value;
+            const tooltip = document.getElementById('tooltip');
+            if (tooltip) {
+                // Преобразуем hex в rgba для прозрачности
+                const r = parseInt(value.slice(1, 3), 16);
+                const g = parseInt(value.slice(3, 5), 16);
+                const b = parseInt(value.slice(5, 7), 16);
+                tooltip.style.background = `rgba(${r}, ${g}, ${b}, 0.9)`;
+            }
+        }
+        
+        function updateSelectedNodeStroke() {
+            const color = document.getElementById('selectedNodeStrokeColor').value;
+            const width = parseFloat(document.getElementById('selectedNodeStrokeWidth').value);
+            currentParams.selectedNodeStrokeColor = color;
+            currentParams.selectedNodeStrokeWidth = width;
+            
+            if (g && selectedNodeId) {
+                g.selectAll('.node')
+                    .style('stroke', d => d.id === selectedNodeId ? color : 'none')
+                    .style('stroke-width', d => d.id === selectedNodeId ? width : 0);
+            }
+        }
+
         // Загружаем граф при загрузке страницы только если не указан startId
         window.addEventListener('load', () => {
+            // Инициализируем цвет фона tooltip
+            updateTooltipBackgroundColor();
+            
             const startId = document.getElementById('startId').value.trim();
             if (!startId) {
-                loadGraph();
+            loadGraph();
             }
         });
     </script>

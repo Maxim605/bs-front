@@ -255,6 +255,34 @@ app.get('/api/friendships', async (req, res) => {
   }
 });
 
+// API endpoint для получения данных конкретного пользователя
+app.get('/api/user/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    
+    // Валидация userId
+    const sanitizedUserId = String(userId).replace(/[^0-9a-zA-Z_-]/g, '');
+    
+    const cursor = await db.query(aql`
+      FOR u IN users
+        FILTER u._key == ${sanitizedUserId}
+        LIMIT 1
+        RETURN u
+    `);
+    
+    const users = await cursor.all();
+    
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    
+    res.json(users[0]);
+  } catch (error) {
+    console.error('Ошибка при получении данных пользователя:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Сервер запущен на порту ${PORT}`);
