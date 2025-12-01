@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Граф связей друзей</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin-top: 0;
+            color: #333;
+        }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        .controls input, .controls button, .controls label {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .controls label {
+            border: none;
+            padding: 8px 4px 8px 0;
+            margin-right: 5px;
+        }
+        .controls input[type="text"], .controls input[type="number"] {
+            min-width: 120px;
+        }
+        .controls button {
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .controls button:hover {
+            background: #0056b3;
+        }
+        .settings-panel {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .settings-panel h3 {
+            margin-top: 0;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .settings-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+        .settings-row label {
+            min-width: 150px;
+            font-weight: 500;
+        }
+        .settings-row input[type="range"] {
+            flex: 1;
+            max-width: 300px;
+        }
+        .settings-row input[type="number"] {
+            width: 80px;
+        }
+        .settings-row button {
+            margin-left: auto;
+        }
+        #graph {
+            width: 100%;
+            height: 800px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .node {
+            cursor: pointer;
+        }
+        .link {
+            stroke: #999;
+            stroke-opacity: 0.6;
+            stroke-width: 1.5;
+        }
+        .node-label {
+            font-size: 12px;
+            pointer-events: none;
+            text-anchor: middle;
+            fill: #333;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Граф связей друзей</h1>
+        <div class="controls">
+            <label for="startId" style="font-weight: 500;">Начальный ID:</label>
+            <input type="text" id="startId" placeholder="Оставьте пустым для всех">
+            <label for="depth" style="font-weight: 500;">Глубина:</label>
+            <input type="number" id="depth" placeholder="Глубина связей" min="1" max="10" value="2">
+            <label for="limit" style="font-weight: 500;">Лимит:</label>
+            <input type="number" id="limit" value="1000" min="100" max="10000" step="100">
+            <button onclick="loadGraph()">Загрузить граф</button>
+            <button onclick="resetZoom()">Сбросить масштаб</button>
+            <button onclick="restartSimulation()">Перезапустить симуляцию</button>
+            <span id="status"></span>
+            <span style="margin-left: 20px; color: #666; font-size: 12px;">
+                💡 Масштаб: колесико мыши | Перетаскивание: зажмите узел
+            </span>
+            <div style="width: 100%; margin-top: 10px; color: #666; font-size: 12px;">
+                💡 Для построения графа с определенной глубиной: укажите начальный ID и глубину (1-10). 
+                Если поля пустые, загрузится весь граф с учетом лимита.
+            </div>
+        </div>
+        <div id="graph"></div>
+        <div class="settings-panel">
+            <h3>Настройки графа</h3>
+            <div class="settings-row">
+                <label>Сила отталкивания (Charge):</label>
+                <input type="range" id="chargeStrength" min="-1000" max="0" value="-300" step="50">
+                <input type="number" id="chargeStrengthValue" value="-300" min="-1000" max="0" step="50">
+                <button onclick="updateCharge()">Применить</button>
+            </div>
+            <div class="settings-row">
+                <label>Расстояние связей (Link Distance):</label>
+                <input type="range" id="linkDistance" min="10" max="200" value="50" step="10">
+                <input type="number" id="linkDistanceValue" value="50" min="10" max="200" step="10">
+                <button onclick="updateLinkDistance()">Применить</button>
+            </div>
+            <div class="settings-row">
+                <label>Радиус столкновения (Collision):</label>
+                <input type="range" id="collisionRadius" min="5" max="50" value="20" step="5">
+                <input type="number" id="collisionRadiusValue" value="20" min="5" max="50" step="5">
+                <button onclick="updateCollision()">Применить</button>
+            </div>
+            <div class="settings-row">
+                <label>Скорость затухания (Alpha Decay):</label>
+                <input type="range" id="alphaDecay" min="0.01" max="0.1" value="0.0228" step="0.01">
+                <input type="number" id="alphaDecayValue" value="0.0228" min="0.01" max="0.1" step="0.01">
+                <button onclick="updateAlphaDecay()">Применить</button>
+            </div>
+            <div class="settings-row">
+                <label>Размер узлов:</label>
+                <input type="range" id="nodeSize" min="3" max="20" value="8" step="1">
+                <input type="number" id="nodeSizeValue" value="8" min="3" max="20" step="1">
+                <button onclick="updateNodeSize()">Применить</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let svg, simulation, nodes, links, g, zoom;
+        let currentParams = {
+            chargeStrength: -300,
+            linkDistance: 50,
+            collisionRadius: 20,
+            alphaDecay: 0.0228,
+            nodeSize: 8
+        };
+
+        // Синхронизация range и number inputs
+        document.addEventListener('DOMContentLoaded', () => {
+            const syncInputs = (rangeId, numberId) => {
+                const range = document.getElementById(rangeId);
+                const number = document.getElementById(numberId);
+                range.addEventListener('input', () => {
+                    number.value = range.value;
+                });
+                number.addEventListener('input', () => {
+                    range.value = number.value;
+                });
+            };
+            syncInputs('chargeStrength', 'chargeStrengthValue');
+            syncInputs('linkDistance', 'linkDistanceValue');
+            syncInputs('collisionRadius', 'collisionRadiusValue');
+            syncInputs('alphaDecay', 'alphaDecayValue');
+            syncInputs('nodeSize', 'nodeSizeValue');
+        });
+
+        function loadGraph() {
+            const limit = document.getElementById('limit').value;
+            const startId = document.getElementById('startId').value.trim();
+            const depth = document.getElementById('depth').value;
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = 'Загрузка...';
+            
+            // Формируем URL с параметрами
+            let url = `/api/friendships?limit=${limit}`;
+            if (startId) {
+                url += `&startId=${encodeURIComponent(startId)}&depth=${depth}`;
+            }
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    statusEl.textContent = `Загружено: ${data.nodes.length} узлов, ${data.links.length} связей`;
+                    renderGraph(data);
+                })
+                .catch(error => {
+                    console.error('Ошибка:', error);
+                    statusEl.textContent = 'Ошибка загрузки данных';
+                });
+        }
+
+        function renderGraph(data) {
+            const graphEl = document.getElementById('graph');
+            graphEl.innerHTML = '';
+            
+            const width = graphEl.clientWidth;
+            const height = 800;
+
+            // Сохраняем ссылки на данные
+            nodes = data.nodes;
+            links = data.links;
+
+            svg = d3.select('#graph')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height);
+
+            // Создаем группу для zoom трансформации
+            g = svg.append('g');
+
+            // Настраиваем zoom
+            zoom = d3.zoom()
+                .scaleExtent([0.1, 4])
+                .on('zoom', (event) => {
+                    g.attr('transform', event.transform);
+                });
+
+            svg.call(zoom);
+
+            // Создаем force simulation с текущими параметрами
+            simulation = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(links).id(d => d.id).distance(currentParams.linkDistance))
+                .force('charge', d3.forceManyBody().strength(currentParams.chargeStrength))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(currentParams.collisionRadius))
+                .alphaDecay(currentParams.alphaDecay);
+
+            // Рисуем связи
+            const link = g.append('g')
+                .selectAll('line')
+                .data(links)
+                .enter()
+                .append('line')
+                .attr('class', 'link');
+
+            // Рисуем узлы
+            const node = g.append('g')
+                .selectAll('circle')
+                .data(nodes)
+                .enter()
+                .append('circle')
+                .attr('class', 'node')
+                .attr('r', currentParams.nodeSize)
+                .attr('fill', d => d3.schemeCategory10[d.id % 10])
+                .call(drag(simulation));
+
+            // Добавляем подписи
+            const label = g.append('g')
+                .selectAll('text')
+                .data(nodes)
+                .enter()
+                .append('text')
+                .attr('class', 'node-label')
+                .text(d => d.name)
+                .attr('dy', currentParams.nodeSize + 5);
+
+            // Обновляем позиции при симуляции
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+
+                node
+                    .attr('cx', d => d.x)
+                    .attr('cy', d => d.y);
+
+                label
+                    .attr('x', d => d.x)
+                    .attr('y', d => d.y);
+            });
+
+            // Функция для перетаскивания узлов
+            function drag(simulation) {
+                function dragstarted(event) {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    event.subject.fx = event.subject.x;
+                    event.subject.fy = event.subject.y;
+                }
+
+                function dragged(event) {
+                    event.subject.fx = event.x;
+                    event.subject.fy = event.y;
+                }
+
+                function dragended(event) {
+                    if (!event.active) simulation.alphaTarget(0);
+                    event.subject.fx = null;
+                    event.subject.fy = null;
+                }
+
+                return d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended);
+            }
+        }
+
+        function resetZoom() {
+            if (svg && zoom) {
+                svg.transition()
+                    .duration(750)
+                    .call(zoom.transform, d3.zoomIdentity);
+            }
+        }
+
+        function restartSimulation() {
+            if (simulation) {
+                simulation.alpha(1).restart();
+            }
+        }
+
+        function updateCharge() {
+            const value = parseFloat(document.getElementById('chargeStrength').value);
+            currentParams.chargeStrength = value;
+            if (simulation) {
+                simulation.force('charge', d3.forceManyBody().strength(value));
+                simulation.alpha(1).restart();
+            }
+        }
+
+        function updateLinkDistance() {
+            const value = parseFloat(document.getElementById('linkDistance').value);
+            currentParams.linkDistance = value;
+            if (simulation && links) {
+                const linkForce = simulation.force('link');
+                if (linkForce) {
+                    linkForce.distance(value);
+                } else {
+                    simulation.force('link', d3.forceLink(links).id(d => d.id).distance(value));
+                }
+                simulation.alpha(1).restart();
+            }
+        }
+
+        function updateCollision() {
+            const value = parseFloat(document.getElementById('collisionRadius').value);
+            currentParams.collisionRadius = value;
+            if (simulation) {
+                simulation.force('collision', d3.forceCollide().radius(value));
+                simulation.alpha(1).restart();
+            }
+        }
+
+        function updateAlphaDecay() {
+            const value = parseFloat(document.getElementById('alphaDecay').value);
+            currentParams.alphaDecay = value;
+            if (simulation) {
+                simulation.alphaDecay(value);
+                simulation.alpha(1).restart();
+            }
+        }
+
+        function updateNodeSize() {
+            const value = parseFloat(document.getElementById('nodeSize').value);
+            currentParams.nodeSize = value;
+            if (g) {
+                g.selectAll('.node')
+                    .attr('r', value);
+                g.selectAll('.node-label')
+                    .attr('dy', value + 5);
+            }
+        }
+
+        // Загружаем граф при загрузке страницы только если не указан startId
+        window.addEventListener('load', () => {
+            const startId = document.getElementById('startId').value.trim();
+            if (!startId) {
+                loadGraph();
+            }
+        });
+    </script>
+</body>
+</html>
+
