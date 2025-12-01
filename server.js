@@ -24,111 +24,130 @@ app.get('/api/friendships', async (req, res) => {
     const limit = parseInt(req.query.limit) || 1000;
     const startId = req.query.startId;
     const depth = parseInt(req.query.depth) || 2;
+    const onlyWithFriends = req.query.onlyWithFriends === 'true';
+    const minConnections = parseInt(req.query.minConnections) || 2;
     
     let edges = [];
     
     if (startId) {
       // Построение графа с заданной глубиной начиная с startId
-      // Используем GRAPH TRAVERSAL для получения всех связей до указанной глубины
-      const graphName = 'friendships_graph'; // Имя графа в ArangoDB
+      const graphName = 'friendships_graph';
       
       try {
-        // Пытаемся использовать именованный граф
-        // Получаем все пути от 1 до depth уровня
+        // Пытаемся использовать именованный граф с оптимизированным запросом
+        // Дедупликация и нормализация ребер выполняется в AQL
+        // Валидация startId: только безопасные символы для предотвращения инъекций
+        const sanitizedStartId = String(startId).replace(/[^0-9a-zA-Z_-]/g, '');
+        const startDoc = `users/${sanitizedStartId}`;
+        
         const cursor = await db.query(aql`
-          FOR v, e, p IN 1..${depth} OUTBOUND CONCAT('users/', ${startId}) 
-          GRAPH ${graphName}
-          OPTIONS { uniqueVertices: 'path', uniqueEdges: 'path' }
-          LIMIT ${limit * 10}
-          RETURN {
-            edges: p.edges
-          }
+          FOR v, e, p IN 1..${depth} OUTBOUND ${startDoc}
+            GRAPH ${graphName}
+            OPTIONS { uniqueVertices: 'global', uniqueEdges: 'global' }
+            LET from = SPLIT(e._from, '/')[1]
+            LET to = SPLIT(e._to, '/')[1]
+            LET fromNum = TO_NUMBER(from)
+            LET toNum = TO_NUMBER(to)
+            LET a = (fromNum <= toNum ? from : to)
+            LET b = (fromNum <= toNum ? to : from)
+            COLLECT pair = { a, b }
+            LIMIT ${limit}
+            RETURN { from: pair.a, to: pair.b, _key: CONCAT(pair.a, '-', pair.b) }
         `);
         
-        const paths = await cursor.all();
-        
-        // Извлекаем все уникальные ребра из путей
-        const edgeSet = new Set();
-        const tempEdges = [];
-        paths.forEach(path => {
-          if (path.edges && Array.isArray(path.edges)) {
-            path.edges.forEach(edge => {
-              const from = edge._from ? edge._from.split('/')[1] : null;
-              const to = edge._to ? edge._to.split('/')[1] : null;
-              if (from && to) {
-                // Сохраняем ребро в обоих направлениях для уникальности
-                const edgeKey1 = `${from}-${to}`;
-                const edgeKey2 = `${to}-${from}`;
-                if (!edgeSet.has(edgeKey1) && !edgeSet.has(edgeKey2)) {
-                  edgeSet.add(edgeKey1);
-                  tempEdges.push({ from, to, _key: edge._key || `${from}-${to}` });
-                }
-              }
-            });
-          }
-        });
-        
-        edges = tempEdges.slice(0, limit);
+        edges = await cursor.all();
       } catch (graphError) {
-        // Если именованный граф не существует, используем альтернативный подход
-        console.log('Именованный граф не найден, используем альтернативный метод');
+        // Если именованный граф не существует, используем BFS по уровням батчами
+        console.log('Именованный граф не найден, используем BFS по уровням');
         
-        // Рекурсивный поиск связей через коллекцию friendships с BFS
-        const visitedNodes = new Set();
+        // Валидация startId для BFS тоже
+        const sanitizedStartId = String(startId).replace(/[^0-9a-zA-Z_-]/g, '');
+        let frontier = new Set([sanitizedStartId]);
+        const visitedNodes = new Set([sanitizedStartId]);
         const visitedEdges = new Set();
-        const queue = [{ id: startId, level: 0 }];
-        visitedNodes.add(startId);
         const allEdges = [];
         
-        // Сначала добавляем начальный узел
-        while (queue.length > 0 && allEdges.length < limit) {
-          const current = queue.shift();
+        // BFS по уровням - один запрос на уровень вместо N запросов
+        for (let level = 0; level < depth && allEdges.length < limit; level++) {
+          const frontierArr = Array.from(frontier);
+          if (frontierArr.length === 0) break;
           
-          if (current.level >= depth) continue;
+          // Используем Set для O(1) проверки принадлежности вместо O(N) includes
+          const frontierSet = new Set(frontierArr);
+          frontier = new Set();
           
-          // Находим все связи текущего узла (исходящие и входящие)
-          const connectionsCursor = await db.query(aql`
+          // Один запрос для всех узлов текущего фронтира
+          // Примечание: LIMIT применяется после сбора всех уникальных ребер уровня
+          // для обеспечения полного покрытия уровня перед переходом к следующему
+          const cursor = await db.query(aql`
             FOR e IN friendships
-              FILTER SPLIT(e._from, '/')[1] == ${current.id} || SPLIT(e._to, '/')[1] == ${current.id}
-              RETURN {
-                from: SPLIT(e._from, '/')[1],
-                to: SPLIT(e._to, '/')[1],
-                _key: e._key
+              LET f = SPLIT(e._from, '/')[1]
+              LET t = SPLIT(e._to, '/')[1]
+              FILTER f IN ${frontierArr} OR t IN ${frontierArr}
+              LET fromNum = TO_NUMBER(f)
+              LET toNum = TO_NUMBER(t)
+              LET a = (fromNum <= toNum ? f : t)
+              LET b = (fromNum <= toNum ? t : f)
+              COLLECT pair = { a, b }
+              RETURN { 
+                from: pair.a, 
+                to: pair.b, 
+                _key: CONCAT(pair.a, '-', pair.b)
               }
           `);
           
-          const connections = await connectionsCursor.all();
+          const connections = await cursor.all();
+          
+          // Применяем лимит после обработки уровня для обеспечения полного покрытия
+          const remainingLimit = limit - allEdges.length;
           
           for (const edge of connections) {
-            // Создаем уникальный ключ для ребра (независимо от направления)
-            const edgeKey1 = `${edge.from}-${edge.to}`;
-            const edgeKey2 = `${edge.to}-${edge.from}`;
+            if (allEdges.length >= limit) break;
             
-            if (!visitedEdges.has(edgeKey1) && !visitedEdges.has(edgeKey2)) {
-              visitedEdges.add(edgeKey1);
-              allEdges.push(edge);
+            const key = `${edge.from}-${edge.to}`;
+            
+            if (!visitedEdges.has(key)) {
+              visitedEdges.add(key);
+              allEdges.push({ from: edge.from, to: edge.to, _key: edge._key });
             }
             
-            // Добавляем соседей в очередь для следующего уровня
-            const neighborId = edge.from === current.id ? edge.to : edge.from;
-            if (!visitedNodes.has(neighborId) && current.level < depth - 1) {
-              visitedNodes.add(neighborId);
-              queue.push({ id: neighborId, level: current.level + 1 });
+            // Добавляем соседей в следующий фронтир
+            // Используем Set.has для O(1) проверки вместо O(N) includes
+            const fromInFrontier = frontierSet.has(edge.from);
+            const toInFrontier = frontierSet.has(edge.to);
+            
+            if (fromInFrontier && !visitedNodes.has(edge.to) && level < depth - 1) {
+              visitedNodes.add(edge.to);
+              frontier.add(edge.to);
+            }
+            if (toInFrontier && !visitedNodes.has(edge.from) && level < depth - 1) {
+              visitedNodes.add(edge.from);
+              frontier.add(edge.from);
             }
           }
+          
+          if (allEdges.length >= limit) break;
         }
         
-        edges = allEdges.slice(0, limit);
+        edges = allEdges;
       }
     } else {
       // Получаем все связи из коллекции friendships (старое поведение)
+      // Нормализуем ребра для консистентности
       const cursor = await db.query(aql`
         FOR e IN friendships
           LIMIT ${limit}
+          LET from = SPLIT(e._from, '/')[1]
+          LET to = SPLIT(e._to, '/')[1]
+          LET fromNum = TO_NUMBER(from)
+          LET toNum = TO_NUMBER(to)
+          LET a = (fromNum <= toNum ? from : to)
+          LET b = (fromNum <= toNum ? to : from)
+          COLLECT pair = { a, b }
           RETURN {
-            from: SPLIT(e._from, '/')[1],
-            to: SPLIT(e._to, '/')[1],
-            _key: e._key
+            from: pair.a,
+            to: pair.b,
+            _key: CONCAT(pair.a, '-', pair.b)
           }
       `);
       
@@ -142,24 +161,85 @@ app.get('/api/friendships', async (req, res) => {
       userIds.add(edge.to);
     });
     
-    // Получаем информацию о пользователях
-    const users = [];
-    for (const userId of userIds) {
-      try {
-        const userDoc = await db.collection('users').document(userId);
-        users.push({
-          id: userId,
-          name: userDoc.name || userDoc.first_name || `User ${userId}`,
-          _key: userDoc._key
+    // Если включен фильтр "только люди с друзьями", итеративно удаляем узлы с недостаточным количеством связей
+    if (onlyWithFriends && edges.length > 0) {
+      let changed = true;
+      let iteration = 0;
+      const maxIterations = 100;
+      
+      while (changed && iteration < maxIterations) {
+        changed = false;
+        iteration++;
+        
+        // Подсчитываем степени узлов в JS (быстрее для уже загруженных данных)
+        // Можно было бы в БД, но для итеративного процесса проще в памяти
+        const nodeConnections = new Map();
+        edges.forEach(edge => {
+          nodeConnections.set(edge.from, (nodeConnections.get(edge.from) || 0) + 1);
+          nodeConnections.set(edge.to, (nodeConnections.get(edge.to) || 0) + 1);
         });
-      } catch (e) {
-        // Если пользователь не найден, добавляем с дефолтным именем
-        users.push({
-          id: userId,
-          name: `User ${userId}`,
-          _key: userId
+        
+        // Находим узлы, которые нужно удалить
+        const nodesToRemove = new Set();
+        nodeConnections.forEach((count, userId) => {
+          if (count < minConnections) {
+            nodesToRemove.add(userId);
+            changed = true;
+          }
         });
+        
+        // Удаляем узлы и связанные ребра
+        if (nodesToRemove.size > 0) {
+          edges = edges.filter(edge => 
+            !nodesToRemove.has(edge.from) && !nodesToRemove.has(edge.to)
+          );
+          
+          userIds.clear();
+          edges.forEach(edge => {
+            userIds.add(edge.from);
+            userIds.add(edge.to);
+          });
+        }
       }
+      
+      console.log(`Фильтрация завершена за ${iteration} итераций. Осталось узлов: ${userIds.size}, связей: ${edges.length}`);
+    }
+    
+    // Батчевое получение информации о пользователях (один запрос вместо N)
+    const userKeys = Array.from(userIds);
+    const users = [];
+    
+    if (userKeys.length > 0) {
+      // Разбиваем на батчи по 1000 для избежания слишком больших запросов
+      const batchSize = 1000;
+      const userMap = new Map();
+      
+      for (let i = 0; i < userKeys.length; i += batchSize) {
+        const batch = userKeys.slice(i, i + batchSize);
+        
+        const usersCursor = await db.query(aql`
+          FOR u IN users
+            FILTER u._key IN ${batch}
+            RETURN { 
+              id: u._key, 
+              name: (u.name != null ? u.name : (u.first_name != null ? u.first_name : CONCAT('User ', u._key))), 
+              _key: u._key 
+            }
+        `);
+        
+        const usersBatch = await usersCursor.all();
+        usersBatch.forEach(u => userMap.set(u.id, u));
+      }
+      
+      // Создаем массив пользователей, добавляя дефолтные значения для отсутствующих
+      userKeys.forEach(k => {
+        const user = userMap.get(k);
+        users.push(user || {
+          id: k,
+          name: `User ${k}`,
+          _key: k
+        });
+      });
     }
     
     res.json({

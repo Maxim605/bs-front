@@ -44,6 +44,12 @@
         .controls input[type="text"], .controls input[type="number"] {
             min-width: 120px;
         }
+        .controls input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            margin: 0;
+        }
         .controls button {
             background: #007bff;
             color: white;
@@ -122,15 +128,21 @@
             <input type="number" id="depth" placeholder="Глубина связей" min="1" max="10" value="2">
             <label for="limit" style="font-weight: 500;">Лимит:</label>
             <input type="number" id="limit" value="1000" min="100" max="10000" step="100">
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <input type="checkbox" id="onlyWithFriends" style="width: auto; min-width: auto;">
+                <label for="onlyWithFriends" style="font-weight: 500; margin: 0; padding: 0;">Только люди с друзьями</label>
+            </div>
+            <label for="minConnections" style="font-weight: 500;">Мин. связей:</label>
+            <input type="number" id="minConnections" value="2" min="1" max="100" step="1">
             <button onclick="loadGraph()">Загрузить граф</button>
             <button onclick="resetZoom()">Сбросить масштаб</button>
             <button onclick="restartSimulation()">Перезапустить симуляцию</button>
             <span id="status"></span>
             <span style="margin-left: 20px; color: #666; font-size: 12px;">
-                💡 Масштаб: колесико мыши | Перетаскивание: зажмите узел
+                Масштаб: колесико мыши | Перетаскивание: зажмите узел
             </span>
             <div style="width: 100%; margin-top: 10px; color: #666; font-size: 12px;">
-                💡 Для построения графа с определенной глубиной: укажите начальный ID и глубину (1-10). 
+                Для построения графа с определенной глубиной: укажите начальный ID и глубину (1-10). 
                 Если поля пустые, загрузится весь граф с учетом лимита.
             </div>
         </div>
@@ -203,6 +215,8 @@
             const limit = document.getElementById('limit').value;
             const startId = document.getElementById('startId').value.trim();
             const depth = document.getElementById('depth').value;
+            const onlyWithFriends = document.getElementById('onlyWithFriends').checked;
+            const minConnections = document.getElementById('minConnections').value;
             const statusEl = document.getElementById('status');
             statusEl.textContent = 'Загрузка...';
             
@@ -210,6 +224,9 @@
             let url = `/api/friendships?limit=${limit}`;
             if (startId) {
                 url += `&startId=${encodeURIComponent(startId)}&depth=${depth}`;
+            }
+            if (onlyWithFriends) {
+                url += `&onlyWithFriends=true&minConnections=${minConnections}`;
             }
             
             fetch(url)
