@@ -208,6 +208,9 @@
             <button onclick="loadGraph()">Загрузить граф</button>
             <button onclick="resetZoom()">Сбросить масштаб</button>
             <button onclick="restartSimulation()">Перезапустить симуляцию</button>
+            <button onclick="exportGraphToJSON()">Экспортировать JSON</button>
+            <button onclick="loadGraphFromJSON()">Загрузить JSON</button>
+            <input type="file" id="jsonFileInput" accept=".json" style="display: none;">
             <span id="status"></span>
             <span style="margin-left: 20px; color: #666; font-size: 12px;">
                 Масштаб: колесико мыши | Перетаскивание: зажмите узел
@@ -332,6 +335,68 @@
             syncInputs('nodeSize', 'nodeSizeValue');
             syncInputs('tooltipFontSize', 'tooltipFontSizeValue');
             syncInputs('selectedNodeStrokeWidth', 'selectedNodeStrokeWidthValue');
+            
+            // Обработчик загрузки JSON файла
+            const fileInput = document.getElementById('jsonFileInput');
+            if (fileInput) {
+                fileInput.addEventListener('change', function(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const jsonData = JSON.parse(e.target.result);
+                            
+                            // Валидация данных
+                            if (!jsonData.nodes || !jsonData.links) {
+                                throw new Error('Некорректный формат JSON. Ожидаются поля "nodes" и "links".');
+                            }
+                            
+                            if (!Array.isArray(jsonData.nodes) || !Array.isArray(jsonData.links)) {
+                                throw new Error('Поля "nodes" и "links" должны быть массивами.');
+                            }
+                            
+                            // Преобразуем links, если они в формате {from, to} в {source, target}
+                            const processedLinks = jsonData.links.map(link => {
+                                if (link.from && link.to) {
+                                    return {
+                                        source: link.from,
+                                        target: link.to
+                                    };
+                                } else if (link.source && link.target) {
+                                    return link;
+                                } else {
+                                    throw new Error('Некорректный формат связей. Ожидаются поля "from"/"to" или "source"/"target".');
+                                }
+                            });
+                            
+                            // Обновляем данные и отрисовываем граф
+                            const graphData = {
+                                nodes: jsonData.nodes,
+                                links: processedLinks
+                            };
+                            
+                            const statusEl = document.getElementById('status');
+                            statusEl.textContent = `Загружено из JSON: ${graphData.nodes.length} узлов, ${graphData.links.length} связей`;
+                            renderGraph(graphData);
+                            
+                        } catch (error) {
+                            console.error('Ошибка при загрузке JSON:', error);
+                            alert('Ошибка при загрузке файла: ' + error.message);
+                        }
+                    };
+                    
+                    reader.onerror = function() {
+                        alert('Ошибка при чтении файла.');
+                    };
+                    
+                    reader.readAsText(file);
+                    
+                    // Сбрасываем значение input, чтобы можно было загрузить тот же файл снова
+                    event.target.value = '';
+                });
+            }
         });
 
         function loadGraph() {
@@ -952,6 +1017,53 @@
                 g.selectAll('.node')
                     .style('stroke', d => d.id === selectedNodeId ? color : 'none')
                     .style('stroke-width', d => d.id === selectedNodeId ? width : 0);
+            }
+        }
+
+        function exportGraphToJSON() {
+            if (!nodes || !links || nodes.length === 0) {
+                alert('Граф не загружен. Сначала загрузите граф.');
+                return;
+            }
+            
+            // Нормализуем links: извлекаем ID из source и target (могут быть объектами после D3)
+            const normalizedLinks = links.map(link => {
+                const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                return {
+                    source: sourceId,
+                    target: targetId
+                };
+            });
+            
+            // Формируем объект для экспорта
+            const graphData = {
+                nodes: nodes,
+                links: normalizedLinks
+            };
+            
+            // Преобразуем в JSON с красивым форматированием
+            const jsonString = JSON.stringify(graphData, null, 2);
+            
+            // Создаем Blob и скачиваем файл
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `graph_export_${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = `Экспортировано: ${nodes.length} узлов, ${links.length} связей`;
+        }
+
+        function loadGraphFromJSON() {
+            const fileInput = document.getElementById('jsonFileInput');
+            if (fileInput) {
+                fileInput.click();
             }
         }
 
