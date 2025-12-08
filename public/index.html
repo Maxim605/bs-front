@@ -187,6 +187,96 @@
             height: 14px;
             fill: white;
         }
+        .chart-container {
+            margin-bottom: 40px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .chart-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .chart-svg {
+            width: 100%;
+            height: 300px;
+            background: white;
+            border-radius: 4px;
+            display: block;
+        }
+        .chart-wrapper {
+            width: 100%;
+            overflow-x: auto;
+        }
+        .chart-tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 12px 15px;
+            border-radius: 6px;
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 1000;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            max-width: 300px;
+            line-height: 1.6;
+        }
+        .chart-tooltip.visible {
+            opacity: 1;
+        }
+        .chart-tooltip-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding-bottom: 5px;
+        }
+        .chart-tooltip-item {
+            margin: 3px 0;
+        }
+        .correlation-matrix {
+            width: 100%;
+            margin-top: 20px;
+        }
+        .correlation-cell {
+            cursor: pointer;
+        }
+        .correlation-cell:hover {
+            stroke: #333;
+            stroke-width: 2;
+        }
+        .axis {
+            font-size: 12px;
+        }
+        .axis-label {
+            font-size: 14px;
+            fill: #666;
+        }
+        .line {
+            fill: none;
+            stroke-width: 2;
+        }
+        .dot {
+            fill: #007bff;
+            stroke: white;
+            stroke-width: 2;
+            cursor: pointer;
+        }
+        .dot:hover {
+            fill: #0056b3;
+            r: 6;
+        }
+        .grid-line {
+            stroke: #e0e0e0;
+            stroke-width: 1;
+            stroke-dasharray: 3,3;
+        }
     </style>
 </head>
 <body>
@@ -205,6 +295,10 @@
             </div>
             <label for="minConnections" style="font-weight: 500;">Мин. связей:</label>
             <input type="number" id="minConnections" value="2" min="1" max="100" step="1">
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <input type="checkbox" id="colorByCluster" style="width: auto; min-width: auto;" onchange="updateClusterColors()">
+                <label for="colorByCluster" style="font-weight: 500; margin: 0; padding: 0;">Окраска по кластерам</label>
+            </div>
             <button onclick="loadGraph()">Загрузить граф</button>
             <button onclick="resetZoom()">Сбросить масштаб</button>
             <button onclick="restartSimulation()">Перезапустить симуляцию</button>
@@ -222,6 +316,16 @@
         </div>
         <div id="graph"></div>
         <div id="tooltip" class="tooltip"></div>
+        
+        <!-- Контейнер для графиков epoch_stats -->
+        <div id="epochStatsContainer" style="margin-top: 30px; display: none;">
+            <h2>Динамика параметров кластеризации</h2>
+            <div class="controls" style="margin-bottom: 20px;">
+                <button onclick="loadEpochStatsFromFile()">Загрузить epoch_stats из JSON</button>
+                <input type="file" id="epochStatsFileInput" accept=".json" style="display: none;" onchange="handleEpochStatsFile(event)">
+            </div>
+            <div id="epochStatsCharts"></div>
+        </div>
         <div class="settings-panel">
             <h3>Настройки графа</h3>
             <div class="settings-row">
@@ -315,6 +419,22 @@
         let selectedNodeId = null;
         let selectedNodeData = null;
         let userDataCache = new Map();
+        let colorByCluster = false;
+        let epochStatsData = null;
+        
+        // Функция для получения цвета кластера
+        function getClusterColor(clusterId) {
+            if (clusterId === null || clusterId === undefined) {
+                return '#999'; // Серый для вершин без кластера
+            }
+            // Используем цветовую схему для кластеров
+            const colors = d3.schemeCategory10;
+            const clusterIndex = Math.abs(String(clusterId).split('').reduce((a, b) => {
+                a = ((a << 5) - a) + b.charCodeAt(0);
+                return a & a;
+            }, 0)) % colors.length;
+            return colors[clusterIndex];
+        }
 
         // Синхронизация range и number inputs
         document.addEventListener('DOMContentLoaded', () => {
@@ -348,38 +468,48 @@
                         try {
                             const jsonData = JSON.parse(e.target.result);
                             
-                            // Валидация данных
-                            if (!jsonData.nodes || !jsonData.links) {
-                                throw new Error('Некорректный формат JSON. Ожидаются поля "nodes" и "links".');
-                            }
-                            
-                            if (!Array.isArray(jsonData.nodes) || !Array.isArray(jsonData.links)) {
-                                throw new Error('Поля "nodes" и "links" должны быть массивами.');
-                            }
-                            
-                            // Преобразуем links, если они в формате {from, to} в {source, target}
-                            const processedLinks = jsonData.links.map(link => {
-                                if (link.from && link.to) {
-                                    return {
-                                        source: link.from,
-                                        target: link.to
-                                    };
-                                } else if (link.source && link.target) {
-                                    return link;
-                                } else {
-                                    throw new Error('Некорректный формат связей. Ожидаются поля "from"/"to" или "source"/"target".');
+                            // Загружаем граф, если есть nodes и links
+                            if (jsonData.nodes && jsonData.links) {
+                                if (!Array.isArray(jsonData.nodes) || !Array.isArray(jsonData.links)) {
+                                    throw new Error('Поля "nodes" и "links" должны быть массивами.');
                                 }
-                            });
+                                
+                                // Преобразуем links, если они в формате {from, to} в {source, target}
+                                const processedLinks = jsonData.links.map(link => {
+                                    if (link.from && link.to) {
+                                        return {
+                                            source: link.from,
+                                            target: link.to
+                                        };
+                                    } else if (link.source && link.target) {
+                                        return link;
+                                    } else {
+                                        throw new Error('Некорректный формат связей. Ожидаются поля "from"/"to" или "source"/"target".');
+                                    }
+                                });
+                                
+                                // Обновляем данные и отрисовываем граф
+                                const graphData = {
+                                    nodes: jsonData.nodes,
+                                    links: processedLinks
+                                };
+                                
+                                const statusEl = document.getElementById('status');
+                                statusEl.textContent = `Загружено из JSON: ${graphData.nodes.length} узлов, ${graphData.links.length} связей`;
+                                renderGraph(graphData);
+                            }
                             
-                            // Обновляем данные и отрисовываем граф
-                            const graphData = {
-                                nodes: jsonData.nodes,
-                                links: processedLinks
-                            };
+                            // Загружаем epoch_stats, если есть
+                            if (jsonData.epoch_stats && Array.isArray(jsonData.epoch_stats)) {
+                                epochStatsData = jsonData.epoch_stats;
+                                renderEpochStatsCharts(epochStatsData);
+                                document.getElementById('epochStatsContainer').style.display = 'block';
+                            }
                             
-                            const statusEl = document.getElementById('status');
-                            statusEl.textContent = `Загружено из JSON: ${graphData.nodes.length} узлов, ${graphData.links.length} связей`;
-                            renderGraph(graphData);
+                            // Если нет ни графа, ни epoch_stats, показываем ошибку
+                            if ((!jsonData.nodes || !jsonData.links) && (!jsonData.epoch_stats || !Array.isArray(jsonData.epoch_stats))) {
+                                throw new Error('Некорректный формат JSON. Ожидаются поля "nodes"/"links" или "epoch_stats".');
+                            }
                             
                         } catch (error) {
                             console.error('Ошибка при загрузке JSON:', error);
@@ -405,6 +535,7 @@
             const depth = document.getElementById('depth').value;
             const onlyWithFriends = document.getElementById('onlyWithFriends').checked;
             const minConnections = document.getElementById('minConnections').value;
+            colorByCluster = document.getElementById('colorByCluster').checked;
             const statusEl = document.getElementById('status');
             statusEl.textContent = 'Загрузка...';
             
@@ -433,6 +564,9 @@
             const graphEl = document.getElementById('graph');
             graphEl.innerHTML = '';
             
+            // Обновляем флаг окраски по кластерам
+            colorByCluster = document.getElementById('colorByCluster').checked;
+            
             // Сбрасываем выбранную вершину при перерисовке
             selectedNodeId = null;
             selectedNodeData = null;
@@ -459,7 +593,7 @@
 
             // Настраиваем zoom
             zoom = d3.zoom()
-                .scaleExtent([0.1, 4])
+                .scaleExtent([0.01, 4])
                 .on('zoom', (event) => {
                     g.attr('transform', event.transform);
                     // Обновляем позицию tooltip при зуме
@@ -484,7 +618,24 @@
                 .data(links)
                 .enter()
                 .append('line')
-                .attr('class', 'link');
+                .attr('class', 'link')
+                .attr('stroke', d => {
+                    if (!colorByCluster) {
+                        return '#999';
+                    }
+                    // При создании links source и target еще могут быть строками (ID)
+                    const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
+                    const targetId = typeof d.target === 'object' ? d.target.id : d.target;
+                    const sourceNode = nodes.find(n => n.id === sourceId);
+                    const targetNode = nodes.find(n => n.id === targetId);
+                    if (sourceNode && targetNode && 
+                        sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                        targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                        sourceNode.cluster === targetNode.cluster) {
+                        return getClusterColor(sourceNode.cluster);
+                    }
+                    return '#999';
+                });
 
             // Рисуем узлы
             const node = g.append('g')
@@ -494,7 +645,12 @@
                 .append('circle')
                 .attr('class', 'node')
                 .attr('r', currentParams.nodeSize)
-                .attr('fill', d => d3.schemeCategory10[d.id % 10])
+                .attr('fill', d => {
+                    if (colorByCluster) {
+                        return getClusterColor(d.cluster);
+                    }
+                    return d3.schemeCategory10[d.id % 10];
+                })
                 .style('cursor', 'pointer')
                 .style('stroke', d => d.id === selectedNodeId ? currentParams.selectedNodeStrokeColor : 'none')
                 .style('stroke-width', d => d.id === selectedNodeId ? currentParams.selectedNodeStrokeWidth : 0)
@@ -534,11 +690,31 @@
                     .attr('x1', d => d.source.x)
                     .attr('y1', d => d.source.y)
                     .attr('x2', d => d.target.x)
-                    .attr('y2', d => d.target.y);
+                    .attr('y2', d => d.target.y)
+                    .attr('stroke', d => {
+                        if (!colorByCluster) {
+                            return '#999';
+                        }
+                        const sourceNode = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
+                        const targetNode = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
+                        if (sourceNode && targetNode && 
+                            sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                            targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                            sourceNode.cluster === targetNode.cluster) {
+                            return getClusterColor(sourceNode.cluster);
+                        }
+                        return '#999';
+                    });
 
                 node
                     .attr('cx', d => d.x)
-                    .attr('cy', d => d.y);
+                    .attr('cy', d => d.y)
+                    .attr('fill', d => {
+                        if (colorByCluster) {
+                            return getClusterColor(d.cluster);
+                        }
+                        return d3.schemeCategory10[d.id % 10];
+                    });
 
                 label
                     .attr('x', d => d.x)
@@ -639,6 +815,40 @@
                     .attr('r', value);
                 g.selectAll('.node-label')
                     .attr('dy', value + 5);
+            }
+        }
+        
+        // Функция для обновления цветов при изменении флага окраски по кластерам
+        function updateClusterColors() {
+            colorByCluster = document.getElementById('colorByCluster').checked;
+            if (g && nodes) {
+                // Обновляем цвета вершин
+                g.selectAll('.node')
+                    .attr('fill', d => {
+                        if (colorByCluster) {
+                            return getClusterColor(d.cluster);
+                        }
+                        return d3.schemeCategory10[d.id % 10];
+                    });
+                
+                // Обновляем цвета рёбер
+                if (links) {
+                    g.selectAll('.link')
+                        .attr('stroke', d => {
+                            if (!colorByCluster) {
+                                return '#999';
+                            }
+                            const sourceNode = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
+                            const targetNode = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
+                            if (sourceNode && targetNode && 
+                                sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                                targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                                sourceNode.cluster === targetNode.cluster) {
+                                return getClusterColor(sourceNode.cluster);
+                            }
+                            return '#999';
+                        });
+                }
             }
         }
 
@@ -1067,6 +1277,507 @@
             }
         }
 
+        // Функция для загрузки epoch_stats из файла
+        function loadEpochStatsFromFile() {
+            document.getElementById('epochStatsFileInput').click();
+        }
+        
+        function handleEpochStatsFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const jsonData = JSON.parse(e.target.result);
+                    
+                    if (!jsonData.epoch_stats || !Array.isArray(jsonData.epoch_stats)) {
+                        throw new Error('Некорректный формат JSON. Ожидается поле "epoch_stats" с массивом.');
+                    }
+                    
+                    epochStatsData = jsonData.epoch_stats;
+                    renderEpochStatsCharts(epochStatsData);
+                    
+                    // Показываем контейнер
+                    document.getElementById('epochStatsContainer').style.display = 'block';
+                    
+                } catch (error) {
+                    console.error('Ошибка при загрузке epoch_stats:', error);
+                    alert('Ошибка при загрузке файла: ' + error.message);
+                }
+            };
+            
+            reader.onerror = function() {
+                alert('Ошибка при чтении файла.');
+            };
+            
+            reader.readAsText(file);
+            
+            // Сбрасываем значение input
+            event.target.value = '';
+        }
+        
+        // Создаем tooltip для графиков
+        const chartTooltip = d3.select('body').append('div')
+            .attr('class', 'chart-tooltip')
+            .style('opacity', 0);
+        
+        // Функция для получения всех параметров для данного k
+        function getAllParamsForK(data, k) {
+            const item = data.find(d => d.k === k);
+            if (!item) return null;
+            
+            return {
+                k: item.k,
+                modularity: item.modularity,
+                nodes_count: item.stats.nodes_count,
+                edges_count: item.stats.edges_count,
+                density: item.stats.density,
+                average_clustering: item.stats.average_clustering,
+                is_connected: item.stats.is_connected,
+                number_connected_components: item.stats.number_connected_components,
+                diameter: item.stats.diameter,
+                average_shortest_path_length: item.stats.average_shortest_path_length
+            };
+        }
+        
+        // Функция для отрисовки одного графика
+        function renderSingleChart(container, chartConfig, kValues, fullData, index) {
+            const chartDiv = document.createElement('div');
+            chartDiv.className = 'chart-container';
+            chartDiv.innerHTML = `<div class="chart-title">${chartConfig.title}</div>`;
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'chart-wrapper';
+            chartDiv.appendChild(wrapper);
+            
+            const svg = d3.select(wrapper)
+                .append('svg')
+                .attr('class', 'chart-svg');
+            
+            container.appendChild(chartDiv);
+            
+            function updateChart() {
+                // Очищаем предыдущий график
+                svg.selectAll('*').remove();
+                
+                // Настройка размеров
+                const margin = { top: 20, right: 30, bottom: 50, left: 70 };
+                const containerWidth = chartDiv.clientWidth;
+                const width = Math.max(containerWidth - margin.left - margin.right, 300);
+                const height = 300 - margin.top - margin.bottom;
+                
+                svg.attr('width', containerWidth)
+                   .attr('height', 300)
+                   .attr('viewBox', `0 0 ${containerWidth} 300`);
+                
+                const g = svg.append('g')
+                    .attr('transform', `translate(${margin.left},${margin.top})`);
+                
+                // Масштабы
+                const xScale = d3.scaleLinear()
+                    .domain(d3.extent(kValues))
+                    .range([0, width])
+                    .nice();
+                
+                const yScale = d3.scaleLinear()
+                    .domain(d3.extent(chartConfig.data))
+                    .range([height, 0])
+                    .nice();
+                
+                // Сетка
+                const xAxisGrid = d3.axisBottom(xScale)
+                    .ticks(10)
+                    .tickSize(-height)
+                    .tickFormat('');
+                
+                const yAxisGrid = d3.axisLeft(yScale)
+                    .ticks(10)
+                    .tickSize(-width)
+                    .tickFormat('');
+                
+                g.append('g')
+                    .attr('class', 'grid-line')
+                    .attr('transform', `translate(0,${height})`)
+                    .call(xAxisGrid);
+                
+                g.append('g')
+                    .attr('class', 'grid-line')
+                    .call(yAxisGrid);
+                
+                // Линия
+                const line = d3.line()
+                    .x((d, i) => xScale(kValues[i]))
+                    .y(d => yScale(d))
+                    .curve(d3.curveMonotoneX);
+                
+                g.append('path')
+                    .datum(chartConfig.data)
+                    .attr('class', 'line')
+                    .attr('d', line)
+                    .attr('stroke', chartConfig.color)
+                    .attr('stroke-width', 2);
+                
+                // Точки с улучшенным tooltip
+                g.selectAll('.dot')
+                    .data(chartConfig.data.map((d, i) => ({ value: d, index: i })))
+                    .enter()
+                    .append('circle')
+                    .attr('class', 'dot')
+                    .attr('cx', d => xScale(kValues[d.index]))
+                    .attr('cy', d => yScale(d.value))
+                    .attr('r', 4)
+                    .attr('fill', chartConfig.color)
+                    .on('mouseover', function(event, d) {
+                        const k = kValues[d.index];
+                        const allParams = getAllParamsForK(fullData, k);
+                        
+                        if (allParams) {
+                            let tooltipContent = `<div class="chart-tooltip-title">k = ${k}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>${chartConfig.yLabel}:</strong> ${d.value.toFixed(4)}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Modularity:</strong> ${allParams.modularity.toFixed(4)}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Density:</strong> ${allParams.density.toFixed(6)}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Average Clustering:</strong> ${allParams.average_clustering.toFixed(4)}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Diameter:</strong> ${allParams.diameter}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Avg Shortest Path:</strong> ${allParams.average_shortest_path_length.toFixed(4)}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Connected Components:</strong> ${allParams.number_connected_components}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Is Connected:</strong> ${allParams.is_connected ? 'Да' : 'Нет'}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Nodes:</strong> ${allParams.nodes_count}</div>`;
+                            tooltipContent += `<div class="chart-tooltip-item"><strong>Edges:</strong> ${allParams.edges_count}</div>`;
+                            
+                            chartTooltip.html(tooltipContent)
+                                .style('opacity', 1);
+                        }
+                        
+                        d3.select(this)
+                            .attr('r', 6)
+                            .style('fill', '#0056b3');
+                    })
+                    .on('mousemove', function(event) {
+                        chartTooltip
+                            .style('left', (event.pageX + 10) + 'px')
+                            .style('top', (event.pageY - 10) + 'px');
+                    })
+                    .on('mouseout', function() {
+                        chartTooltip.style('opacity', 0);
+                        d3.select(this)
+                            .attr('r', 4)
+                            .style('fill', chartConfig.color);
+                    });
+                
+                // Оси
+                const xAxis = d3.axisBottom(xScale)
+                    .ticks(Math.min(10, kValues.length));
+                
+                const yAxis = d3.axisLeft(yScale)
+                    .ticks(10);
+                
+                g.append('g')
+                    .attr('class', 'axis')
+                    .attr('transform', `translate(0,${height})`)
+                    .call(xAxis)
+                    .append('text')
+                    .attr('class', 'axis-label')
+                    .attr('x', width / 2)
+                    .attr('y', 40)
+                    .attr('fill', '#666')
+                    .style('text-anchor', 'middle')
+                    .text('k (количество кластеров)');
+                
+                g.append('g')
+                    .attr('class', 'axis')
+                    .call(yAxis)
+                    .append('text')
+                    .attr('class', 'axis-label')
+                    .attr('transform', 'rotate(-90)')
+                    .attr('y', -50)
+                    .attr('x', -height / 2)
+                    .attr('fill', '#666')
+                    .style('text-anchor', 'middle')
+                    .text(chartConfig.yLabel);
+            }
+            
+            // Первоначальная отрисовка
+            updateChart();
+            
+            // Обработчик изменения размера окна
+            let resizeTimer;
+            window.addEventListener('resize', function() {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(updateChart, 250);
+            });
+        }
+        
+        // Функция для вычисления корреляционной матрицы
+        function calculateCorrelationMatrix(data) {
+            const params = [
+                { name: 'Modularity', key: 'modularity', getValue: d => d.modularity },
+                { name: 'Density', key: 'density', getValue: d => d.stats.density },
+                { name: 'Avg Clustering', key: 'avg_clustering', getValue: d => d.stats.average_clustering },
+                { name: 'Diameter', key: 'diameter', getValue: d => d.stats.diameter },
+                { name: 'Avg Shortest Path', key: 'avg_path', getValue: d => d.stats.average_shortest_path_length },
+                { name: 'Connected Components', key: 'components', getValue: d => d.stats.number_connected_components }
+            ];
+            
+            const values = params.map(p => data.map(p.getValue));
+            
+            function correlation(x, y) {
+                const n = x.length;
+                const sumX = d3.sum(x);
+                const sumY = d3.sum(y);
+                const sumXY = d3.sum(x.map((xi, i) => xi * y[i]));
+                const sumX2 = d3.sum(x.map(xi => xi * xi));
+                const sumY2 = d3.sum(y.map(yi => yi * yi));
+                
+                const numerator = n * sumXY - sumX * sumY;
+                const denominator = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+                
+                return denominator === 0 ? 0 : numerator / denominator;
+            }
+            
+            const matrix = [];
+            for (let i = 0; i < params.length; i++) {
+                matrix[i] = [];
+                for (let j = 0; j < params.length; j++) {
+                    matrix[i][j] = correlation(values[i], values[j]);
+                }
+            }
+            
+            return { matrix, params };
+        }
+        
+        // Функция для отрисовки тепловой матрицы корреляций
+        function renderCorrelationMatrix(container, data) {
+            const { matrix, params } = calculateCorrelationMatrix(data);
+            
+            const matrixDiv = document.createElement('div');
+            matrixDiv.className = 'chart-container';
+            matrixDiv.innerHTML = '<div class="chart-title">Тепловая матрица корреляций</div>';
+            
+            const wrapper = document.createElement('div');
+            wrapper.className = 'chart-wrapper';
+            matrixDiv.appendChild(wrapper);
+            
+            const svg = d3.select(wrapper)
+                .append('svg')
+                .attr('class', 'chart-svg');
+            
+            container.appendChild(matrixDiv);
+            
+            function updateMatrix() {
+                svg.selectAll('*').remove();
+                
+                const margin = { top: 80, right: 30, bottom: 80, left: 80 };
+                const containerWidth = matrixDiv.clientWidth;
+                const size = Math.min(containerWidth - margin.left - margin.right, 600);
+                const cellSize = size / params.length;
+                const totalSize = size + margin.left + margin.right;
+                
+                svg.attr('width', containerWidth)
+                   .attr('height', totalSize)
+                   .attr('viewBox', `0 0 ${containerWidth} ${totalSize}`);
+                
+                const g = svg.append('g')
+                    .attr('transform', `translate(${margin.left},${margin.top})`);
+                
+                // Цветовая шкала
+                const colorScale = d3.scaleSequential(d3.interpolateRdBu)
+                    .domain([1, -1]);
+                
+                // Создаем ячейки
+                params.forEach((param, i) => {
+                    params.forEach((param2, j) => {
+                        const value = matrix[i][j];
+                        
+                        g.append('rect')
+                            .attr('class', 'correlation-cell')
+                            .attr('x', j * cellSize)
+                            .attr('y', i * cellSize)
+                            .attr('width', cellSize)
+                            .attr('height', cellSize)
+                            .attr('fill', colorScale(value))
+                            .attr('stroke', '#fff')
+                            .attr('stroke-width', 1)
+                            .on('mouseover', function(event) {
+                                d3.select(this)
+                                    .attr('stroke', '#333')
+                                    .attr('stroke-width', 2);
+                                
+                                chartTooltip.html(
+                                    `<div class="chart-tooltip-title">Корреляция</div>
+                                     <div class="chart-tooltip-item"><strong>${param.name}</strong> ↔ <strong>${param2.name}</strong></div>
+                                     <div class="chart-tooltip-item"><strong>Значение:</strong> ${value.toFixed(4)}</div>`
+                                )
+                                .style('opacity', 1)
+                                .style('left', (event.pageX + 10) + 'px')
+                                .style('top', (event.pageY - 10) + 'px');
+                            })
+                            .on('mousemove', function(event) {
+                                chartTooltip
+                                    .style('left', (event.pageX + 10) + 'px')
+                                    .style('top', (event.pageY - 10) + 'px');
+                            })
+                            .on('mouseout', function() {
+                                d3.select(this)
+                                    .attr('stroke', '#fff')
+                                    .attr('stroke-width', 1);
+                                chartTooltip.style('opacity', 0);
+                            });
+                        
+                        // Текст со значением
+                        g.append('text')
+                            .attr('x', j * cellSize + cellSize / 2)
+                            .attr('y', i * cellSize + cellSize / 2)
+                            .attr('text-anchor', 'middle')
+                            .attr('dominant-baseline', 'middle')
+                            .attr('font-size', Math.min(12, cellSize / 5))
+                            .attr('fill', Math.abs(value) > 0.5 ? 'white' : 'black')
+                            .text(value.toFixed(2));
+                    });
+                });
+                
+                // Подписи строк
+                params.forEach((param, i) => {
+                    g.append('text')
+                        .attr('x', -10)
+                        .attr('y', i * cellSize + cellSize / 2)
+                        .attr('text-anchor', 'end')
+                        .attr('dominant-baseline', 'middle')
+                        .attr('font-size', 12)
+                        .attr('fill', '#666')
+                        .text(param.name);
+                });
+                
+                // Подписи столбцов
+                params.forEach((param, i) => {
+                    g.append('text')
+                        .attr('x', i * cellSize + cellSize / 2)
+                        .attr('y', -10)
+                        .attr('text-anchor', 'middle')
+                        .attr('dominant-baseline', 'bottom')
+                        .attr('font-size', 12)
+                        .attr('fill', '#666')
+                        .attr('transform', `rotate(-45, ${i * cellSize + cellSize / 2}, -10)`)
+                        .text(param.name);
+                });
+                
+                // Легенда
+                const legendWidth = 200;
+                const legendHeight = 20;
+                const legendX = size - legendWidth;
+                const legendY = size + 30;
+                
+                const legendScale = d3.scaleLinear()
+                    .domain([-1, 1])
+                    .range([0, legendWidth]);
+                
+                const legendAxis = d3.axisBottom(legendScale)
+                    .ticks(5);
+                
+                const legendG = svg.append('g')
+                    .attr('transform', `translate(${margin.left + legendX},${margin.top + legendY})`);
+                
+                const defs = svg.append('defs');
+                const linearGradient = defs.append('linearGradient')
+                    .attr('id', 'correlation-gradient');
+                
+                for (let i = 0; i <= 100; i++) {
+                    linearGradient.append('stop')
+                        .attr('offset', `${i}%`)
+                        .attr('stop-color', colorScale(-1 + (i / 100) * 2));
+                }
+                
+                legendG.append('rect')
+                    .attr('width', legendWidth)
+                    .attr('height', legendHeight)
+                    .style('fill', 'url(#correlation-gradient)');
+                
+                legendG.append('g')
+                    .attr('transform', `translate(0,${legendHeight})`)
+                    .call(legendAxis);
+                
+                legendG.append('text')
+                    .attr('x', legendWidth / 2)
+                    .attr('y', -5)
+                    .attr('text-anchor', 'middle')
+                    .attr('font-size', 12)
+                    .attr('fill', '#666')
+                    .text('Корреляция');
+            }
+            
+            updateMatrix();
+            
+            let resizeTimer;
+            window.addEventListener('resize', function() {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(updateMatrix, 250);
+            });
+        }
+        
+        // Функция для отрисовки графиков epoch_stats
+        function renderEpochStatsCharts(data) {
+            const container = document.getElementById('epochStatsCharts');
+            container.innerHTML = '';
+            
+            if (!data || data.length === 0) {
+                container.innerHTML = '<p>Нет данных для отображения</p>';
+                return;
+            }
+            
+            // Подготовка данных
+            const kValues = data.map(d => d.k);
+            const modularityValues = data.map(d => d.modularity);
+            
+            // Параметры для графиков
+            const charts = [
+                {
+                    title: 'Модульность (Modularity)',
+                    data: modularityValues,
+                    yLabel: 'Modularity',
+                    color: '#007bff'
+                },
+                {
+                    title: 'Плотность графа (Density)',
+                    data: data.map(d => d.stats.density),
+                    yLabel: 'Density',
+                    color: '#28a745'
+                },
+                {
+                    title: 'Средний кластеринг (Average Clustering)',
+                    data: data.map(d => d.stats.average_clustering),
+                    yLabel: 'Average Clustering',
+                    color: '#dc3545'
+                },
+                {
+                    title: 'Диаметр графа (Diameter)',
+                    data: data.map(d => d.stats.diameter),
+                    yLabel: 'Diameter',
+                    color: '#ffc107'
+                },
+                {
+                    title: 'Средняя длина кратчайшего пути (Average Shortest Path Length)',
+                    data: data.map(d => d.stats.average_shortest_path_length),
+                    yLabel: 'Average Shortest Path Length',
+                    color: '#17a2b8'
+                },
+                {
+                    title: 'Количество компонент связности (Number of Connected Components)',
+                    data: data.map(d => d.stats.number_connected_components),
+                    yLabel: 'Number of Connected Components',
+                    color: '#6f42c1'
+                }
+            ];
+            
+            // Создаем графики
+            charts.forEach((chartConfig, index) => {
+                renderSingleChart(container, chartConfig, kValues, data, index);
+            });
+            
+            // Добавляем матрицу корреляций
+            renderCorrelationMatrix(container, data);
+        }
+        
+        
         // Загружаем граф при загрузке страницы только если не указан startId
         window.addEventListener('load', () => {
             // Инициализируем цвет фона tooltip

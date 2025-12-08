@@ -223,7 +223,8 @@ app.get('/api/friendships', async (req, res) => {
             RETURN { 
               id: u._key, 
               name: (u.name != null ? u.name : (u.first_name != null ? u.first_name : CONCAT('User ', u._key))), 
-              _key: u._key 
+              _key: u._key,
+              cluster: u.cluster
             }
         `);
         
@@ -237,7 +238,8 @@ app.get('/api/friendships', async (req, res) => {
         users.push(user || {
           id: k,
           name: `User ${k}`,
-          _key: k
+          _key: k,
+          cluster: undefined
         });
       });
     }
