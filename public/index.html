@@ -59,6 +59,31 @@
         .controls button:hover {
             background: #0056b3;
         }
+        .cluster-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        .legend-color {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            border: 1px solid #ccc;
+            flex-shrink: 0;
+        }
         .settings-panel {
             margin-top: 20px;
             padding: 15px;
@@ -314,6 +339,7 @@
                 Если поля пустые, загрузится весь граф с учетом лимита.
             </div>
         </div>
+        <div id="clusterLegend" class="cluster-legend" style="display: none;"></div>
         <div id="graph"></div>
         <div id="tooltip" class="tooltip"></div>
         
@@ -617,6 +643,8 @@
                     console.log('renderGraph: sourceNode.cluster:', sourceNode.cluster, 'targetNode.cluster:', targetNode.cluster);
                 }
             }
+
+            renderClusterLegend();
 
             svg = d3.select('#graph')
                 .append('svg')
@@ -962,11 +990,63 @@
             }
         }
         
+        function renderClusterLegend() {
+            const legendEl = document.getElementById('clusterLegend');
+            if (!legendEl) {
+                return;
+            }
+            
+            if (!nodes || !nodes.length || !colorByCluster) {
+                legendEl.style.display = 'none';
+                legendEl.innerHTML = '';
+                return;
+            }
+            
+            const clusterMap = new Map();
+            nodes.forEach(node => {
+                if (node.cluster === null || node.cluster === undefined) {
+                    return;
+                }
+                const key = String(node.cluster);
+                const existing = clusterMap.get(key) || { id: node.cluster, count: 0 };
+                existing.count += 1;
+                clusterMap.set(key, existing);
+            });
+            
+            if (!clusterMap.size) {
+                legendEl.style.display = 'none';
+                legendEl.innerHTML = '';
+                return;
+            }
+            
+            legendEl.innerHTML = '';
+            legendEl.style.display = 'flex';
+            
+            [...clusterMap.values()]
+                .sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true, sensitivity: 'base' }))
+                .forEach(cluster => {
+                    const item = document.createElement('div');
+                    item.className = 'legend-item';
+                    
+                    const colorBox = document.createElement('span');
+                    colorBox.className = 'legend-color';
+                    colorBox.style.background = getClusterColor(cluster.id);
+                    
+                    const label = document.createElement('span');
+                    label.textContent = `Кластер ${cluster.id} (${cluster.count})`;
+                    
+                    item.appendChild(colorBox);
+                    item.appendChild(label);
+                    legendEl.appendChild(item);
+                });
+        }
+        
         // Функция для обновления цветов при изменении флага окраски по кластерам
         function updateClusterColors() {
             colorByCluster = document.getElementById('colorByCluster').checked;
             console.log('updateClusterColors: colorByCluster =', colorByCluster);
             console.log('updateClusterColors: узлов с кластерами =', nodes ? nodes.filter(n => n.cluster !== null && n.cluster !== undefined).length : 0);
+            renderClusterLegend();
             if (g && nodes) {
                 // Обновляем цвета вершин
                 g.selectAll('.node')
