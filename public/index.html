@@ -494,6 +494,17 @@
                                     links: processedLinks
                                 };
                                 
+                                // Проверяем наличие кластеров в данных
+                                console.log('Загружено узлов:', graphData.nodes.length);
+                                console.log('Загружено связей:', graphData.links.length);
+                                console.log('Узлов с кластерами:', graphData.nodes.filter(n => n.cluster !== null && n.cluster !== undefined).length);
+                                if (graphData.nodes.length > 0) {
+                                    console.log('Пример узла:', graphData.nodes[0]);
+                                }
+                                if (graphData.links.length > 0) {
+                                    console.log('Пример связи:', graphData.links[0]);
+                                }
+                                
                                 const statusEl = document.getElementById('status');
                                 statusEl.textContent = `Загружено из JSON: ${graphData.nodes.length} узлов, ${graphData.links.length} связей`;
                                 renderGraph(graphData);
@@ -582,6 +593,30 @@
             // Сохраняем ссылки на данные
             nodes = data.nodes;
             links = data.links;
+            
+            // Отладка: проверяем наличие кластеров
+            console.log('renderGraph: colorByCluster =', colorByCluster);
+            console.log('renderGraph: узлов всего =', nodes.length);
+            console.log('renderGraph: связей всего =', links.length);
+            console.log('renderGraph: узлов с кластерами =', nodes.filter(n => n.cluster !== null && n.cluster !== undefined).length);
+            if (nodes.length > 0) {
+                console.log('renderGraph: пример узла:', nodes[0]);
+            }
+            if (links.length > 0) {
+                console.log('renderGraph: пример связи:', links[0]);
+                // Проверяем первую связь
+                const firstLink = links[0];
+                const sourceId = typeof firstLink.source === 'object' ? firstLink.source.id : firstLink.source;
+                const targetId = typeof firstLink.target === 'object' ? firstLink.target.id : firstLink.target;
+                const sourceNode = nodes.find(n => String(n.id) === String(sourceId));
+                const targetNode = nodes.find(n => String(n.id) === String(targetId));
+                console.log('renderGraph: первая связь - sourceId:', sourceId, 'targetId:', targetId);
+                console.log('renderGraph: sourceNode:', sourceNode);
+                console.log('renderGraph: targetNode:', targetNode);
+                if (sourceNode && targetNode) {
+                    console.log('renderGraph: sourceNode.cluster:', sourceNode.cluster, 'targetNode.cluster:', targetNode.cluster);
+                }
+            }
 
             svg = d3.select('#graph')
                 .append('svg')
@@ -623,7 +658,46 @@
                     if (!colorByCluster) {
                         return '#999';
                     }
-                    // При создании links source и target еще могут быть строками (ID)
+                    
+                    // Получаем узлы - source и target могут быть объектами или строками
+                    let sourceNode, targetNode;
+                    if (typeof d.source === 'object') {
+                        sourceNode = d.source;
+                    } else {
+                        sourceNode = nodes.find(n => String(n.id) === String(d.source));
+                    }
+                    
+                    if (typeof d.target === 'object') {
+                        targetNode = d.target;
+                    } else {
+                        targetNode = nodes.find(n => String(n.id) === String(d.target));
+                    }
+                    
+                    if (!sourceNode || !targetNode) {
+                        return '#999';
+                    }
+                    
+                    // Если оба узла в одном кластере - окрашиваем цветом кластера
+                    if (sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                        targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                        sourceNode.cluster === targetNode.cluster) {
+                        return getClusterColor(sourceNode.cluster);
+                    }
+                    
+                    // Если узлы в разных кластерах, но оба имеют кластеры - окрашиваем цветом источника
+                    if (sourceNode.cluster !== null && sourceNode.cluster !== undefined) {
+                        return getClusterColor(sourceNode.cluster);
+                    }
+                    if (targetNode.cluster !== null && targetNode.cluster !== undefined) {
+                        return getClusterColor(targetNode.cluster);
+                    }
+                    
+                    return '#999';
+                })
+                .attr('stroke-width', d => {
+                    if (!colorByCluster) {
+                        return 1.5;
+                    }
                     const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
                     const targetId = typeof d.target === 'object' ? d.target.id : d.target;
                     const sourceNode = nodes.find(n => n.id === sourceId);
@@ -632,9 +706,25 @@
                         sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
                         targetNode.cluster !== null && targetNode.cluster !== undefined &&
                         sourceNode.cluster === targetNode.cluster) {
-                        return getClusterColor(sourceNode.cluster);
+                        return 2.5; // Толще для связей внутри кластера
                     }
-                    return '#999';
+                    return 1.5;
+                })
+                .attr('stroke-opacity', d => {
+                    if (!colorByCluster) {
+                        return 0.6;
+                    }
+                    const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
+                    const targetId = typeof d.target === 'object' ? d.target.id : d.target;
+                    const sourceNode = nodes.find(n => n.id === sourceId);
+                    const targetNode = nodes.find(n => n.id === targetId);
+                    if (sourceNode && targetNode && 
+                        sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                        targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                        sourceNode.cluster === targetNode.cluster) {
+                        return 0.9; // Более яркие для связей внутри кластера
+                    }
+                    return 0.4; // Более прозрачные для связей между кластерами
                 });
 
             // Рисуем узлы
@@ -695,15 +785,69 @@
                         if (!colorByCluster) {
                             return '#999';
                         }
+                        
+                        // Получаем узлы - source и target могут быть объектами или строками
+                        let sourceNode, targetNode;
+                        if (typeof d.source === 'object') {
+                            sourceNode = d.source;
+                        } else {
+                            sourceNode = nodes.find(n => String(n.id) === String(d.source));
+                        }
+                        
+                        if (typeof d.target === 'object') {
+                            targetNode = d.target;
+                        } else {
+                            targetNode = nodes.find(n => String(n.id) === String(d.target));
+                        }
+                        
+                        if (!sourceNode || !targetNode) {
+                            return '#999';
+                        }
+                        
+                        // Если оба узла в одном кластере - окрашиваем цветом кластера
+                        if (sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                            targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                            sourceNode.cluster === targetNode.cluster) {
+                            return getClusterColor(sourceNode.cluster);
+                        }
+                        
+                        // Если узлы в разных кластерах, но оба имеют кластеры - окрашиваем цветом источника
+                        if (sourceNode.cluster !== null && sourceNode.cluster !== undefined) {
+                            return getClusterColor(sourceNode.cluster);
+                        }
+                        if (targetNode.cluster !== null && targetNode.cluster !== undefined) {
+                            return getClusterColor(targetNode.cluster);
+                        }
+                        
+                        return '#999';
+                    })
+                    .attr('stroke-width', d => {
+                        if (!colorByCluster) {
+                            return 1.5;
+                        }
                         const sourceNode = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
                         const targetNode = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
                         if (sourceNode && targetNode && 
                             sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
                             targetNode.cluster !== null && targetNode.cluster !== undefined &&
                             sourceNode.cluster === targetNode.cluster) {
-                            return getClusterColor(sourceNode.cluster);
+                            return 2.5; // Толще для связей внутри кластера
                         }
-                        return '#999';
+                        return 1.5;
+                    })
+                    .attr('stroke-opacity', d => {
+                        if (!colorByCluster) {
+                            return 0.6;
+                        }
+                        const sourceNode = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
+                        const targetNode = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
+                        if (sourceNode && targetNode && 
+                            sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                            targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                            sourceNode.cluster === targetNode.cluster) {
+                            return 0.9; // Более яркие для связей внутри кластера
+                        }
+                        return 0.4; // Более прозрачные для связей между кластерами
                     });
 
                 node
@@ -821,6 +965,8 @@
         // Функция для обновления цветов при изменении флага окраски по кластерам
         function updateClusterColors() {
             colorByCluster = document.getElementById('colorByCluster').checked;
+            console.log('updateClusterColors: colorByCluster =', colorByCluster);
+            console.log('updateClusterColors: узлов с кластерами =', nodes ? nodes.filter(n => n.cluster !== null && n.cluster !== undefined).length : 0);
             if (g && nodes) {
                 // Обновляем цвета вершин
                 g.selectAll('.node')
@@ -838,15 +984,93 @@
                             if (!colorByCluster) {
                                 return '#999';
                             }
-                            const sourceNode = typeof d.source === 'object' ? d.source : nodes.find(n => n.id === d.source);
-                            const targetNode = typeof d.target === 'object' ? d.target : nodes.find(n => n.id === d.target);
-                            if (sourceNode && targetNode && 
-                                sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                            
+                            // Получаем узлы - source и target могут быть объектами или строками
+                            let sourceNode, targetNode;
+                            if (typeof d.source === 'object') {
+                                sourceNode = d.source;
+                            } else {
+                                sourceNode = nodes.find(n => String(n.id) === String(d.source));
+                            }
+                            
+                            if (typeof d.target === 'object') {
+                                targetNode = d.target;
+                            } else {
+                                targetNode = nodes.find(n => String(n.id) === String(d.target));
+                            }
+                            
+                            if (!sourceNode || !targetNode) {
+                                return '#999';
+                            }
+                            
+                            // Если оба узла в одном кластере - окрашиваем цветом кластера
+                            if (sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
                                 targetNode.cluster !== null && targetNode.cluster !== undefined &&
                                 sourceNode.cluster === targetNode.cluster) {
                                 return getClusterColor(sourceNode.cluster);
                             }
+                            
+                            // Если узлы в разных кластерах, но оба имеют кластеры - окрашиваем цветом источника
+                            if (sourceNode.cluster !== null && sourceNode.cluster !== undefined) {
+                                return getClusterColor(sourceNode.cluster);
+                            }
+                            if (targetNode.cluster !== null && targetNode.cluster !== undefined) {
+                                return getClusterColor(targetNode.cluster);
+                            }
+                            
                             return '#999';
+                        })
+                        .attr('stroke-width', d => {
+                            if (!colorByCluster) {
+                                return 1.5;
+                            }
+                            
+                            let sourceNode, targetNode;
+                            if (typeof d.source === 'object') {
+                                sourceNode = d.source;
+                            } else {
+                                sourceNode = nodes.find(n => String(n.id) === String(d.source));
+                            }
+                            
+                            if (typeof d.target === 'object') {
+                                targetNode = d.target;
+                            } else {
+                                targetNode = nodes.find(n => String(n.id) === String(d.target));
+                            }
+                            
+                            if (sourceNode && targetNode && 
+                                sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                                targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                                sourceNode.cluster === targetNode.cluster) {
+                                return 2.5; // Толще для связей внутри кластера
+                            }
+                            return 1.5;
+                        })
+                        .attr('stroke-opacity', d => {
+                            if (!colorByCluster) {
+                                return 0.6;
+                            }
+                            
+                            let sourceNode, targetNode;
+                            if (typeof d.source === 'object') {
+                                sourceNode = d.source;
+                            } else {
+                                sourceNode = nodes.find(n => String(n.id) === String(d.source));
+                            }
+                            
+                            if (typeof d.target === 'object') {
+                                targetNode = d.target;
+                            } else {
+                                targetNode = nodes.find(n => String(n.id) === String(d.target));
+                            }
+                            
+                            if (sourceNode && targetNode && 
+                                sourceNode.cluster !== null && sourceNode.cluster !== undefined &&
+                                targetNode.cluster !== null && targetNode.cluster !== undefined &&
+                                sourceNode.cluster === targetNode.cluster) {
+                                return 0.9; // Более яркие для связей внутри кластера
+                            }
+                            return 0.4; // Более прозрачные для связей между кластерами
                         });
                 }
             }
