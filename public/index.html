@@ -324,6 +324,10 @@
                 <input type="checkbox" id="colorByCluster" style="width: auto; min-width: auto;" onchange="updateClusterColors()">
                 <label for="colorByCluster" style="font-weight: 500; margin: 0; padding: 0;">Окраска по кластерам</label>
             </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <input type="checkbox" id="directedGraph" style="width: auto; min-width: auto;" onchange="updateDirectedGraph()">
+                <label for="directedGraph" style="font-weight: 500; margin: 0; padding: 0;">Граф ориентированный</label>
+            </div>
             <button onclick="loadGraph()">Загрузить граф</button>
             <button onclick="resetZoom()">Сбросить масштаб</button>
             <button onclick="restartSimulation()">Перезапустить симуляцию</button>
@@ -446,6 +450,7 @@
         let selectedNodeData = null;
         let userDataCache = new Map();
         let colorByCluster = false;
+        let directedGraph = false;
         let epochStatsData = null;
         
         // Функция для получения цвета кластера
@@ -460,6 +465,27 @@
                 return a & a;
             }, 0)) % colors.length;
             return colors[clusterIndex];
+        }
+
+        function getNodeConnections(nodeId) {
+            if (!links) return { incoming: 0, outgoing: 0 };
+            
+            let incoming = 0;
+            let outgoing = 0;
+            
+            links.forEach(link => {
+                const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                
+                if (String(sourceId) === String(nodeId)) {
+                    outgoing++;
+                }
+                if (String(targetId) === String(nodeId)) {
+                    incoming++;
+                }
+            });
+            
+            return { incoming, outgoing };
         }
 
         // Синхронизация range и number inputs
@@ -601,8 +627,9 @@
             const graphEl = document.getElementById('graph');
             graphEl.innerHTML = '';
             
-            // Обновляем флаг окраски по кластерам
+            // Обновляем флаги
             colorByCluster = document.getElementById('colorByCluster').checked;
+            directedGraph = document.getElementById('directedGraph').checked;
             
             // Сбрасываем выбранную вершину при перерисовке
             selectedNodeId = null;
@@ -667,6 +694,25 @@
 
             svg.call(zoom);
 
+            const defs = svg.append('defs');
+            if (directedGraph) {
+                const marker = defs.append('marker')
+                    .attr('id', 'arrowhead')
+                    .attr('viewBox', '0 -5 10 10')
+                    .attr('refX', currentParams.nodeSize + 3)
+                    .attr('refY', 0)
+                    .attr('markerWidth', 12)
+                    .attr('markerHeight', 12)
+                    .attr('orient', 'auto')
+                    .attr('markerUnits', 'userSpaceOnUse');
+                
+                marker.append('path')
+                    .attr('d', 'M0,-5L10,0L0,5')
+                    .attr('fill', '#333')
+                    .attr('stroke', '#333')
+                    .attr('stroke-width', '0.5px');
+            }
+
             // Создаем force simulation с текущими параметрами
             simulation = d3.forceSimulation(nodes)
                 .force('link', d3.forceLink(links).id(d => d.id).distance(currentParams.linkDistance))
@@ -682,7 +728,10 @@
                 .enter()
                 .append('line')
                 .attr('class', 'link')
+                .attr('marker-end', directedGraph ? 'url(#arrowhead)' : null)
                 .attr('stroke', d => {
+                    // Всегда окрашиваем связи, даже если colorByCluster выключен
+                    // Но если colorByCluster выключен, используем серый
                     if (!colorByCluster) {
                         return '#999';
                     }
@@ -799,7 +848,13 @@
                 .enter()
                 .append('text')
                 .attr('class', 'node-label')
-                .text(d => d.name)
+                .text(d => {
+                    if (directedGraph) {
+                        const connections = getNodeConnections(d.id);
+                        return `${d.name} (→${connections.outgoing} ←${connections.incoming})`;
+                    }
+                    return d.name;
+                })
                 .attr('dy', currentParams.nodeSize + 5);
 
             // Обновляем позиции при симуляции
@@ -809,6 +864,7 @@
                     .attr('y1', d => d.source.y)
                     .attr('x2', d => d.target.x)
                     .attr('y2', d => d.target.y)
+                    .attr('marker-end', directedGraph ? 'url(#arrowhead)' : null)
                     .attr('stroke', d => {
                         if (!colorByCluster) {
                             return '#999';
@@ -890,7 +946,14 @@
 
                 label
                     .attr('x', d => d.x)
-                    .attr('y', d => d.y);
+                    .attr('y', d => d.y)
+                    .text(d => {
+                        if (directedGraph) {
+                            const connections = getNodeConnections(d.id);
+                            return `${d.name} (→${connections.outgoing} ←${connections.incoming})`;
+                        }
+                        return d.name;
+                    });
                 
                 // Обновляем позицию tooltip для выбранной вершины
                 if (selectedNodeId && selectedNodeData) {
@@ -1153,6 +1216,63 @@
                             return 0.4; // Более прозрачные для связей между кластерами
                         });
                 }
+            }
+        }
+        
+        function updateDirectedGraph() {
+            directedGraph = document.getElementById('directedGraph').checked;
+            
+            if (!svg || !g) {
+                return;
+            }
+            
+            let defs = svg.select('defs');
+            if (defs.empty()) {
+                defs = svg.append('defs');
+            }
+            
+            defs.selectAll('marker').remove();
+            
+            if (directedGraph) {
+                let defs = svg.select('defs');
+                if (defs.empty()) {
+                    defs = svg.append('defs');
+                }
+                
+                defs.selectAll('marker#arrowhead').remove();
+                
+                const marker = defs.append('marker')
+                    .attr('id', 'arrowhead')
+                    .attr('viewBox', '0 -5 10 10')
+                    .attr('refX', currentParams.nodeSize + 3)
+                    .attr('refY', 0)
+                    .attr('markerWidth', 12)
+                    .attr('markerHeight', 12)
+                    .attr('orient', 'auto')
+                    .attr('markerUnits', 'userSpaceOnUse');
+                
+                marker.append('path')
+                    .attr('d', 'M0,-5L10,0L0,5')
+                    .attr('fill', '#333')
+                    .attr('stroke', '#333')
+                    .attr('stroke-width', '0.5px');
+                
+                g.selectAll('.link')
+                    .attr('marker-end', 'url(#arrowhead)');
+            } else {
+                g.selectAll('.link')
+                    .attr('marker-end', null);
+            }
+            
+            if (g && nodes) {
+                g.selectAll('.node-label')
+                    .text(d => {
+                        if (directedGraph) {
+                            const connections = getNodeConnections(d.id);
+                            return `${d.name} (→${connections.outgoing} ←${connections.incoming})`;
+                        }
+                        return d.name;
+                    });
             }
         }
 
